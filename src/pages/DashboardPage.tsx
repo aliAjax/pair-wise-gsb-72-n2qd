@@ -53,7 +53,7 @@ export function DashboardPage() {
         <StatCard
           label="待影响评审"
           value={data?.pendingReview ?? 0}
-          note="其中 1 项含阻断问题"
+          note="阻断问题未清零不能放量"
           icon={<FactCheckOutlinedIcon />}
           tone="orange"
         />
@@ -65,9 +65,9 @@ export function DashboardPage() {
           tone="red"
         />
         <StatCard
-          label="当前影响用户"
+          label="当前影响用户（去重）"
           value={(data?.affectedUsers ?? 0).toLocaleString()}
-          note="按已发布灰度口径估算"
+          note={`简单求和 ${(data?.grossUsers ?? 0).toLocaleString()}，重叠 ${(data?.overlapUsers ?? 0).toLocaleString()} 人只计一次`}
           icon={<GroupOutlinedIcon />}
           tone="blue"
         />
@@ -138,21 +138,21 @@ export function DashboardPage() {
                     {item.flag}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
-                    差异 {item.staging - item.production} 个百分点
+                    所属环境 {item.environment === 'production' ? '生产' : item.environment === 'staging' ? '预发' : '开发'} · 当前放量 {item[item.environment]}%
                   </Typography>
                 </Box>
                 <Box className="environment-values">
                   <Box>
                     <Typography variant="caption">DEV</Typography>
-                    <Typography fontWeight={700}>{item.dev}%</Typography>
+                    <Typography fontWeight={item.environment === 'dev' ? 700 : 400} color={item.environment === 'dev' ? 'text.primary' : 'text.disabled'}>{item.dev || '—'}{item.dev !== 0 && '%'}</Typography>
                   </Box>
                   <Box>
                     <Typography variant="caption">STG</Typography>
-                    <Typography fontWeight={700}>{item.staging}%</Typography>
+                    <Typography fontWeight={item.environment === 'staging' ? 700 : 400} color={item.environment === 'staging' ? 'text.primary' : 'text.disabled'}>{item.staging || '—'}{item.staging !== 0 && '%'}</Typography>
                   </Box>
                   <Box>
                     <Typography variant="caption">PROD</Typography>
-                    <Typography fontWeight={700}>{item.production}%</Typography>
+                    <Typography fontWeight={item.environment === 'production' ? 700 : 400} color={item.environment === 'production' ? 'text.primary' : 'text.disabled'}>{item.production || '—'}{item.production !== 0 && '%'}</Typography>
                   </Box>
                 </Box>
               </Box>

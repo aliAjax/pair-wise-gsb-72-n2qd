@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import {
   Alert,
   Box,
@@ -25,7 +25,7 @@ import {
 import DownloadOutlinedIcon from '@mui/icons-material/DownloadOutlined'
 import UndoOutlinedIcon from '@mui/icons-material/UndoOutlined'
 import { Link } from 'react-router-dom'
-import { useGetAuditQuery, useGetFlagsQuery, useRollbackFlagMutation } from '@/services/flagApi'
+import { useGetAuditQuery, useGetFlagsQuery, useGetImpactQuery, useRollbackFlagMutation } from '@/services/flagApi'
 import { FlagStatusChip } from '@/components/FlagStatusChip'
 
 const actionLabel: Record<string, string> = {
@@ -45,16 +45,17 @@ export function AuditPage() {
   const [flagId, setFlagId] = useState('')
   const [action, setAction] = useState('')
   const { data: events = [], isLoading } = useGetAuditQuery({ flagId: flagId || undefined, action: action || undefined })
+  // 与概览、报告同源的去重口径快照，不再把每条审计记录的人数简单相加
+  const { data: impact } = useGetImpactQuery(undefined)
   const [rollbackFlag, rollbackState] = useRollbackFlagMutation()
   const [selectedFlagId, setSelectedFlagId] = useState('')
   const [reason, setReason] = useState('')
   const [message, setMessage] = useState('')
 
   const selectedFlag = flags.find((flag) => flag.id === selectedFlagId)
-  const totalImpact = useMemo(
-    () => events.reduce((sum, event) => sum + event.affectedUsers, 0),
-    [events],
-  )
+
+  const rollbackEvents = events.filter((event) => event.action === 'rolled-back')
+  const totalReleased = rollbackEvents.reduce((sum, event) => sum + (event.releasedUsers ?? event.affectedUsers), 0)
 
   const submitRollback = async () => {
     if (!selectedFlag || reason.trim().length < 8) {
@@ -62,12 +63,14 @@ export function AuditPage() {
       return
     }
     try {
-      await rollbackFlag({ id: selectedFlag.id, actor: '林默', reason }).unwrap()
+      const result = await rollbackFlag({ id: selectedFlag.id, actor: '林默', reason }).unwrap()
       setSelectedFlagId('')
       setReason('')
-      setMessage('回滚已执行并写入审计记录')
+      setMessage(
+        `回滚已执行，清零前核定释放 ${(result.event?.releasedUsers ?? 0).toLocaleString()} 名去重用户，并已写入审计记录`,
+      )
     } catch {
-      setMessage('回滚失败，请重试')
+      setMessage('回滚入库失败，已从上一份完整记录重试，请重试该操作')
     }
   }
 
@@ -89,10 +92,22 @@ export function AuditPage() {
 
       <Box className="audit-summary">
         <Box><Typography variant="caption">审计事件</Typography><Typography className="summary-value">{events.length}</Typography></Box>
-        <Box><Typography variant="caption">回滚操作</Typography><Typography className="summary-value">{events.filter((event) => event.action === 'rolled-back').length}</Typography></Box>
-        <Box><Typography variant="caption">累计影响用户</Typography><Typography className="summary-value">{totalImpact.toLocaleString()}</Typography></Box>
-        <Box><Typography variant="caption">平均响应时间</Typography><Typography className="summary-value">8.4 分钟</Typography></Box>
+        <Box><Typography variant="caption">回滚操作</Typography><Typography className="summary-value">{rollbackEvents.length}</Typography></Box>
+        <Box>
+          <Typography variant="caption">当前影响用户（去重合计）</Typography>
+          <Typography className="summary-value">{(impact?.totalUsers ?? 0).toLocaleString()}</Typography>
+        </Box>
+        <Box>
+          <Typography variant="caption">回滚累计释放</Typography>
+          <Typography className="summary-value">{totalReleased.toLocaleString()}</Typography>
+        </Box>
       </Box>
+
+      <Alert severity={(impact?.overlapUsers ?? 0) > 0 ? 'info' : 'success'} sx={{ mb: 2 }}>
+        影响合计采用与概览、发布报告相同的去重边际口径：简单求和 {(impact?.grossUsers ?? 0).toLocaleString()} 人，
+        去重后 {(impact?.totalUsers ?? 0).toLocaleString()} 人，{(impact?.overlapUsers ?? 0).toLocaleString()} 名用户被多个开关命中但只计一次；
+        不再把各条审计记录的影响人数直接相加。
+      </Alert>
 
       <Card sx={{ mb: 2 }}>
         <CardContent>
@@ -143,7 +158,35 @@ export function AuditPage() {
                     <TableCell>
                       <Chip size="small" variant="outlined" label={`${event.before || '-'} → ${event.after || '-'}`} />
                     </TableCell>
-                    <TableCell>{event.affectedUsers.toLocaleString()}</TableCell>
+                    <TableCell>
+                      {event.action === 'rolled-back' ? (
+                        <>
+                          <Typography variant="body2" fontWeight={700} color="success.main">
+                            释放 {(event.releasedUsers ?? event.affectedUsers).toLocaleString()}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">清零前核定，去重边际</Typography>
+                        </>
+                      ) : (event.deltaUsers ?? 0) !== 0 ? (
+                        <>
+                          <Typography
+                            variant="body2"
+                            fontWeight={700}
+                            color={(event.deltaUsers ?? 0) > 0 ? 'error.main' : 'success.main'}
+                          >
+                            {(event.deltaUsers ?? 0) > 0 ? '+' : ''}
+                            {(event.deltaUsers ?? 0).toLocaleString()}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">净变化 · 去重边际</Typography>
+                        </>
+                      ) : (
+                        <>
+                          <Typography variant="body2">{event.affectedUsers.toLocaleString()}</Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {event.grossUsers ? `毛覆盖 ${event.grossUsers.toLocaleString()} · 去重后净变化为 0` : '无放量变化'}
+                          </Typography>
+                        </>
+                      )}
+                    </TableCell>
                     <TableCell align="right">
                       <Button
                         size="small"

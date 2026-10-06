@@ -2,26 +2,36 @@ import { createApi, fakeBaseQuery } from '@reduxjs/toolkit/query/react'
 import {
   applyReview,
   getDashboardStats,
+  getImpactSnapshot,
   readDatabase,
   rollbackFlag,
-  writeDatabase,
+  saveFlag,
+  submitForReview,
 } from '@/services/database'
 import type {
   AuditEvent,
   DashboardData,
+  Environment,
   FeatureFlag,
   FlagFilter,
   ImpactIssue,
+  ImpactSnapshot,
   ReviewPayload,
 } from '@/types'
 
 const delay = (milliseconds = 180) =>
   new Promise((resolve) => window.setTimeout(resolve, milliseconds))
 
+export interface MutationResult {
+  flag: FeatureFlag
+  event?: AuditEvent
+  impact: ImpactSnapshot
+}
+
 export const flagApi = createApi({
   reducerPath: 'flagApi',
   baseQuery: fakeBaseQuery<{ message: string }>(),
-  tagTypes: ['Flags', 'Flag', 'Issues', 'Audit', 'Dashboard'],
+  tagTypes: ['Flags', 'Flag', 'Issues', 'Audit', 'Dashboard', 'Impact'],
   endpoints: (builder) => ({
     getDashboard: builder.query<DashboardData, void>({
       async queryFn() {
@@ -29,6 +39,16 @@ export const flagApi = createApi({
         return { data: getDashboardStats() }
       },
       providesTags: ['Dashboard'],
+    }),
+    /** 统一去重口径影响快照，概览/审计/报告都订阅它 */
+    getImpact: builder.query<ImpactSnapshot, Environment | '' | undefined>({
+      async queryFn(environment) {
+        await delay(120)
+        return { data: getImpactSnapshot(environment ?? '') }
+      },
+      providesTags: (_result, _error, environment) => [
+        { type: 'Impact', id: environment ?? 'all' },
+      ],
     }),
     getFlags: builder.query<FeatureFlag[], FlagFilter>({
       async queryFn(filters) {
@@ -57,74 +77,31 @@ export const flagApi = createApi({
       },
       providesTags: (_result, _error, id) => [{ type: 'Flag', id }],
     }),
-    saveFlag: builder.mutation<FeatureFlag, FeatureFlag>({
+    saveFlag: builder.mutation<MutationResult, FeatureFlag>({
       async queryFn(flag) {
         await delay(260)
-        const db = readDatabase()
-        const index = db.flags.findIndex((item) => item.id === flag.id)
-        const next = { ...flag, updatedAt: new Date().toISOString() }
-        if (index >= 0) {
-          const before = db.flags[index]
-          db.flags[index] = next
-          db.audit.unshift({
-            id: `audit-${Date.now()}`,
-            flagId: flag.id,
-            flagKey: flag.key,
-            action: 'updated',
-            actor: flag.lastChangedBy,
-            summary: '更新开关受众、依赖、版本或回滚条件。',
-            before: before.status,
-            after: next.status,
-            affectedUsers: Math.round(900000 * (next.rolloutPercentage / 100)),
-            createdAt: new Date().toISOString(),
-          })
-        } else {
-          db.flags.unshift(next)
-          db.audit.unshift({
-            id: `audit-${Date.now()}`,
-            flagId: next.id,
-            flagKey: next.key,
-            action: 'created',
-            actor: next.lastChangedBy,
-            summary: '创建功能开关草稿。',
-            after: next.status,
-            affectedUsers: 0,
-            createdAt: new Date().toISOString(),
-          })
+        try {
+          return { data: saveFlag(flag) }
+        } catch (error) {
+          return { error: { message: error instanceof Error ? error.message : '保存失败' } }
         }
-        writeDatabase(db)
-        return { data: next }
       },
-      invalidatesTags: ['Flags', 'Dashboard', 'Audit'],
+      invalidatesTags: ['Flags', 'Dashboard', 'Audit', 'Impact'],
     }),
     submitForReview: builder.mutation<FeatureFlag, { id: string; actor: string }>({
       async queryFn({ id, actor }) {
         await delay(220)
-        const db = readDatabase()
-        const flag = db.flags.find((item) => item.id === id)
-        if (!flag) return { error: { message: '功能开关不存在' } }
-        flag.status = 'review'
-        flag.updatedAt = new Date().toISOString()
-        flag.lastChangedBy = actor
-        db.audit.unshift({
-          id: `audit-${Date.now()}`,
-          flagId: id,
-          flagKey: flag.key,
-          action: 'submitted',
-          actor,
-          summary: '提交发布影响评审。',
-          before: 'draft',
-          after: 'review',
-          affectedUsers: Math.round(900000 * (flag.rolloutPercentage / 100)),
-          createdAt: new Date().toISOString(),
-        })
-        writeDatabase(db)
-        return { data: flag }
+        try {
+          return { data: submitForReview(id, actor) }
+        } catch (error) {
+          return { error: { message: error instanceof Error ? error.message : '提交评审失败' } }
+        }
       },
       invalidatesTags: (_result, _error, arg) => [
         'Flags',
         'Dashboard',
         'Audit',
+        'Impact',
         { type: 'Flag', id: arg.id },
       ],
     }),
@@ -141,10 +118,11 @@ export const flagApi = createApi({
         'Flags',
         'Dashboard',
         'Audit',
+        'Impact',
         { type: 'Flag', id: arg.id },
       ],
     }),
-    rollbackFlag: builder.mutation<FeatureFlag, { id: string; actor: string; reason: string }>({
+    rollbackFlag: builder.mutation<MutationResult, { id: string; actor: string; reason: string }>({
       async queryFn({ id, actor, reason }) {
         await delay(260)
         try {
@@ -157,6 +135,7 @@ export const flagApi = createApi({
         'Flags',
         'Dashboard',
         'Audit',
+        'Impact',
         { type: 'Flag', id: arg.id },
       ],
     }),
@@ -189,6 +168,7 @@ export const flagApi = createApi({
 
 export const {
   useGetDashboardQuery,
+  useGetImpactQuery,
   useGetFlagsQuery,
   useGetFlagQuery,
   useSaveFlagMutation,

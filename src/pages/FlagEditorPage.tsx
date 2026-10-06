@@ -117,10 +117,10 @@ export function FlagEditorPage() {
     if (!validate()) return null
     try {
       const result = await saveFlag({ ...draft, updatedAt: new Date().toISOString() }).unwrap()
-      setSavedFlag(result)
-      setDraft(result)
-      if (isNew) navigate(`/flags/${result.id}`, { replace: true })
-      return result
+      setSavedFlag(result.flag)
+      setDraft(result.flag)
+      if (isNew) navigate(`/flags/${result.flag.id}`, { replace: true })
+      return result.flag
     } catch {
       setErrors(['保存失败，请检查本地存储权限后重试'])
       return null

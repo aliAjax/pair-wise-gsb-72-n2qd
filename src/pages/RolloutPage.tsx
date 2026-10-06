@@ -22,11 +22,12 @@ import {
 import PlayArrowOutlinedIcon from '@mui/icons-material/PlayArrowOutlined'
 import UndoOutlinedIcon from '@mui/icons-material/UndoOutlined'
 import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutline'
-import { useGetFlagsQuery, useRollbackFlagMutation, useSaveFlagMutation } from '@/services/flagApi'
+import { useGetFlagsQuery, useGetImpactQuery, useRollbackFlagMutation, useSaveFlagMutation } from '@/services/flagApi'
 import { FlagStatusChip } from '@/components/FlagStatusChip'
 
 export function RolloutPage() {
   const { data: flags = [], isLoading } = useGetFlagsQuery({})
+  const { data: impact } = useGetImpactQuery(undefined)
   const [selectedId, setSelectedId] = useState('')
   const [rollbackOpen, setRollbackOpen] = useState(false)
   const [reason, setReason] = useState('')
@@ -39,6 +40,7 @@ export function RolloutPage() {
   }, [flags, selectedId])
 
   const flag = flags.find((item) => item.id === selectedId)
+  const flagImpact = impact?.flags.find((item) => item.flagId === selectedId)
   const currentStepIndex = flag?.rolloutSteps.findIndex((step) => step.status === 'running') ?? -1
 
   const advanceRollout = async () => {
@@ -55,7 +57,7 @@ export function RolloutPage() {
     const nextPercentage =
       steps.find((step) => step.status === 'running')?.percentage ?? flag.rolloutPercentage
     try {
-      await saveFlag({
+      const result = await saveFlag({
         ...flag,
         rolloutSteps: steps,
         rolloutPercentage: nextPercentage,
@@ -63,16 +65,19 @@ export function RolloutPage() {
         status: 'active',
         lastChangedBy: '林默',
       }).unwrap()
-      setMessage(`灰度已推进至 ${nextPercentage}%，新的回滚边界已保存`)
+      const delta = result.event?.deltaUsers ?? 0
+      setMessage(
+        `灰度已推进至 ${nextPercentage}%，合计已按去重边际重算：净${delta >= 0 ? '新增' : '释放'} ${Math.abs(delta).toLocaleString()} 人，当前去重总影响 ${result.impact.totalUsers.toLocaleString()} 人`,
+      )
     } catch {
-      setMessage('推进失败，请检查配置后重试')
+      setMessage('推进入库失败，已从上一份完整记录重试，请重试该操作')
     }
   }
 
   const pauseRollout = async () => {
     if (!flag) return
     try {
-      await saveFlag({
+      const result = await saveFlag({
         ...flag,
         status: 'frozen',
         lastChangedBy: '林默',
@@ -80,9 +85,11 @@ export function RolloutPage() {
           step.status === 'running' ? { ...step, status: 'paused' } : step,
         ),
       }).unwrap()
-      setMessage('灰度流量已冻结，现有用户继续使用当前配置')
+      setMessage(
+        `灰度流量已冻结，覆盖人群保持不变（去重合计 ${result.impact.totalUsers.toLocaleString()} 人），现有用户继续使用当前配置`,
+      )
     } catch {
-      setMessage('冻结失败，请重试')
+      setMessage('冻结入库失败，请重试')
     }
   }
 
@@ -92,12 +99,14 @@ export function RolloutPage() {
       return
     }
     try {
-      await rollbackFlag({ id: flag.id, actor: '林默', reason }).unwrap()
+      const result = await rollbackFlag({ id: flag.id, actor: '林默', reason }).unwrap()
       setRollbackOpen(false)
       setReason('')
-      setMessage('已完成回滚，开关关闭并写入审计日志')
+      setMessage(
+        `已完成回滚：清零前核定释放 ${(result.event?.releasedUsers ?? 0).toLocaleString()} 名去重用户并写入审计日志，当前去重总影响 ${result.impact.totalUsers.toLocaleString()} 人`,
+      )
     } catch {
-      setMessage('回滚失败，请重试')
+      setMessage('回滚入库失败，已从上一份完整记录重试，请重试该操作')
     }
   }
 
@@ -128,7 +137,7 @@ export function RolloutPage() {
         <>
           <Card sx={{ mb: 2 }}>
             <CardContent>
-              <Stack direction="row" justifyContent="space-between" alignItems="flex-start" sx={{ mb: 3 }}>
+              <Stack direction="row" justifyContent="space-between" alignItems="flex-start" sx={{ mb: 1.5 }}>
                 <Box>
                   <Stack direction="row" spacing={1} alignItems="center">
                     <Typography variant="h3">{flag.name}</Typography>
@@ -148,6 +157,39 @@ export function RolloutPage() {
                   </Button>
                 </Stack>
               </Stack>
+              <Stack direction="row" spacing={3} sx={{ mb: 2 }} flexWrap="wrap" useFlexGap>
+                <Box>
+                  <Typography variant="caption" color="text.secondary">本开关毛覆盖（含重叠）</Typography>
+                  <Typography fontWeight={700}>{(flagImpact?.grossUsers ?? 0).toLocaleString()} 人</Typography>
+                </Box>
+                <Box>
+                  <Typography variant="caption" color="text.secondary">去重边际（计入合计）</Typography>
+                  <Typography fontWeight={700} color="primary.main">{(flagImpact?.marginalUsers ?? 0).toLocaleString()} 人</Typography>
+                </Box>
+                <Box>
+                  <Typography variant="caption" color="text.secondary">与其他开关重叠</Typography>
+                  <Typography fontWeight={700} color={(flagImpact?.overlapUsers ?? 0) > 0 ? 'warning.main' : undefined}>
+                    {(flagImpact?.overlapUsers ?? 0).toLocaleString()} 人
+                  </Typography>
+                </Box>
+                <Box>
+                  <Typography variant="caption" color="text.secondary">全部开关去重总影响</Typography>
+                  <Typography fontWeight={700}>{(impact?.totalUsers ?? 0).toLocaleString()} 人</Typography>
+                </Box>
+              </Stack>
+              {(flagImpact?.overlaps.length ?? 0) > 0 && (
+                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                  {flagImpact?.overlaps.map((overlap) => (
+                    <Chip
+                      key={overlap.flagId}
+                      size="small"
+                      color="warning"
+                      variant="outlined"
+                      label={`与 ${overlap.flagKey} 重叠 ${overlap.users.toLocaleString()} 人（只计一次）`}
+                    />
+                  ))}
+                </Stack>
+              )}
               <Stepper activeStep={Math.max(currentStepIndex, 0)} alternativeLabel>
                 {flag.rolloutSteps.map((step) => (
                   <Step key={step.id} completed={step.status === 'completed'}>
@@ -192,13 +234,16 @@ export function RolloutPage() {
               <CardContent>
                 <Typography variant="h3" sx={{ mb: 1.5 }}>环境差异与客户端约束</Typography>
                 <Box className="environment-compare">
-                  {(['dev', 'staging', 'production'] as const).map((environment, index) => (
-                    <Box key={environment}>
-                      <Typography variant="caption" color="text.secondary">{environment.toUpperCase()}</Typography>
-                      <Typography className="summary-value">{index === 0 ? 100 : index === 1 ? flag.rolloutPercentage : Math.max(flag.rolloutPercentage - 20, 0)}%</Typography>
-                      <Typography variant="caption">最低 {flag.minClientVersion[environment]}</Typography>
-                    </Box>
-                  ))}
+                  {(['dev', 'staging', 'production'] as const).map((environment) => {
+                    const isOwner = flag.environment === environment
+                    return (
+                      <Box key={environment} sx={{ opacity: isOwner ? 1 : 0.5 }}>
+                        <Typography variant="caption" color="text.secondary">{environment.toUpperCase()}</Typography>
+                        <Typography className="summary-value">{isOwner ? `${flag.rolloutPercentage}%` : '—'}</Typography>
+                        <Typography variant="caption">最低 {flag.minClientVersion[environment]}</Typography>
+                      </Box>
+                    )
+                  })}
                 </Box>
                 <Alert severity="warning" sx={{ mt: 2 }}>
                   生产环境低于最低版本的用户会走降级路径，不会命中新逻辑。
