@@ -5,8 +5,11 @@ import type {
   ImpactIssue,
   ReviewPayload,
 } from '@/types'
+import { computeCoveredUsers, computeImpact } from '@/services/impact'
 
 const STORAGE_KEY = 'feature-flag-release-console-v1'
+/** 上一份完整记录的备份键：入库失败或主记录损坏时从这里恢复 */
+const BACKUP_STORAGE_KEY = `${STORAGE_KEY}-backup`
 
 export interface Database {
   flags: FeatureFlag[]
@@ -371,22 +374,56 @@ export const seedDatabase = (): Database => ({ flags, audit, issues })
 
 export const readDatabase = (): Database => {
   const raw = localStorage.getItem(STORAGE_KEY)
-  if (!raw) {
-    const seed = seedDatabase()
-    writeDatabase(seed)
-    return seed
+  if (raw) {
+    try {
+      return JSON.parse(raw) as Database
+    } catch {
+      // 主记录损坏：从上一份完整记录恢复，保证重开页面读回同一套数字
+      const backup = localStorage.getItem(BACKUP_STORAGE_KEY)
+      if (backup) {
+        try {
+          const restored = JSON.parse(backup) as Database
+          try {
+            localStorage.setItem(STORAGE_KEY, backup)
+          } catch {
+            // 修复主记录失败不影响本次读取
+          }
+          return restored
+        } catch {
+          // 备份同样不可用，退回种子数据
+        }
+      }
+    }
   }
-  try {
-    return JSON.parse(raw) as Database
-  } catch {
-    const seed = seedDatabase()
-    writeDatabase(seed)
-    return seed
-  }
+  const seed = seedDatabase()
+  writeDatabase(seed)
+  return seed
 }
 
 export const writeDatabase = (database: Database): void => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(database))
+  const payload = JSON.stringify(database)
+  try {
+    // 主记录写入成功后同步备份，备份始终保持最后一份完整记录
+    localStorage.setItem(STORAGE_KEY, payload)
+    localStorage.setItem(BACKUP_STORAGE_KEY, payload)
+  } catch {
+    // 入库失败：从上一份完整记录恢复主记录，再重试本次写入
+    const backup = localStorage.getItem(BACKUP_STORAGE_KEY)
+    if (!backup) throw new Error('写入本地存储失败')
+    try {
+      localStorage.setItem(STORAGE_KEY, backup)
+      localStorage.setItem(STORAGE_KEY, payload)
+      localStorage.setItem(BACKUP_STORAGE_KEY, payload)
+    } catch {
+      // 重试仍失败：尽力把主记录恢复为完整的上一份记录，再抛错给调用方
+      try {
+        localStorage.setItem(STORAGE_KEY, backup)
+      } catch {
+        // 存储不可用
+      }
+      throw new Error('写入本地存储失败，已恢复为上一份完整记录')
+    }
+  }
 }
 
 export const applyReview = (flagId: string, payload: ReviewPayload): FeatureFlag => {
@@ -398,6 +435,8 @@ export const applyReview = (flagId: string, payload: ReviewPayload): FeatureFlag
   flag.enabled = payload.decision === 'approved'
   flag.updatedAt = new Date().toISOString()
   flag.lastChangedBy = payload.reviewer
+  // 统一口径：按审批后配置计算该开关的独立覆盖人数
+  const affectedUsers = computeCoveredUsers(db.flags, flagId)
   db.audit.unshift({
     id: `audit-${Date.now()}`,
     flagId,
@@ -407,7 +446,7 @@ export const applyReview = (flagId: string, payload: ReviewPayload): FeatureFlag
     summary: payload.comment,
     before,
     after: flag.status,
-    affectedUsers: Math.round(120000 * (flag.rolloutPercentage / 100)),
+    affectedUsers,
     createdAt: new Date().toISOString(),
   })
   if (payload.freezeUntil && payload.decision === 'approved') {
@@ -422,6 +461,8 @@ export const rollbackFlag = (flagId: string, actor: string, reason: string): Fea
   const flag = db.flags.find((item) => item.id === flagId)
   if (!flag) throw new Error('功能开关不存在')
   const before = `${flag.status} / ${flag.rolloutPercentage}%`
+  // 先算清本次回滚释放的人数（该开关当前独立覆盖的影响范围），再清零灰度
+  const releasedUsers = computeCoveredUsers(db.flags, flagId)
   flag.status = 'rolled-back'
   flag.enabled = false
   flag.rolloutPercentage = 0
@@ -439,7 +480,7 @@ export const rollbackFlag = (flagId: string, actor: string, reason: string): Fea
     summary: reason,
     before,
     after: 'rolled-back / 0%',
-    affectedUsers: Math.round(980000 * (flag.rolloutPercentage / 100)),
+    affectedUsers: releasedUsers,
     createdAt: new Date().toISOString(),
   })
   writeDatabase(db)
@@ -448,11 +489,13 @@ export const rollbackFlag = (flagId: string, actor: string, reason: string): Fea
 
 export const getDashboardStats = (): DashboardData => {
   const db = readDatabase()
+  // 与审计、发布报告共用统一口径：去重后的边际合计，灰度一变即重算
+  const impact = computeImpact(db.flags)
   return {
     activeFlags: db.flags.filter((flag) => flag.enabled).length,
-    pendingReview: db.flags.filter((flag) => flag.status === 'review').length + 2,
+    pendingReview: db.flags.filter((flag) => flag.status === 'review').length,
     blockerIssues: db.issues.filter((issue) => issue.severity === 'blocker' && !issue.resolved).length,
-    affectedUsers: 5246900,
+    affectedUsers: impact.totalUsers,
     environmentDiff: [
       { flag: '极速支付流程 V2', dev: 100, staging: 20, production: 0 },
       { flag: '账单异步导出 V3', dev: 5, staging: 0, production: 0 },

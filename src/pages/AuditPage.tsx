@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import {
   Alert,
   Box,
@@ -25,7 +25,7 @@ import {
 import DownloadOutlinedIcon from '@mui/icons-material/DownloadOutlined'
 import UndoOutlinedIcon from '@mui/icons-material/UndoOutlined'
 import { Link } from 'react-router-dom'
-import { useGetAuditQuery, useGetFlagsQuery, useRollbackFlagMutation } from '@/services/flagApi'
+import { useGetAuditQuery, useGetFlagsQuery, useGetImpactQuery, useRollbackFlagMutation } from '@/services/flagApi'
 import { FlagStatusChip } from '@/components/FlagStatusChip'
 
 const actionLabel: Record<string, string> = {
@@ -45,16 +45,13 @@ export function AuditPage() {
   const [flagId, setFlagId] = useState('')
   const [action, setAction] = useState('')
   const { data: events = [], isLoading } = useGetAuditQuery({ flagId: flagId || undefined, action: action || undefined })
+  const { data: impact } = useGetImpactQuery()
   const [rollbackFlag, rollbackState] = useRollbackFlagMutation()
   const [selectedFlagId, setSelectedFlagId] = useState('')
   const [reason, setReason] = useState('')
   const [message, setMessage] = useState('')
 
   const selectedFlag = flags.find((flag) => flag.id === selectedFlagId)
-  const totalImpact = useMemo(
-    () => events.reduce((sum, event) => sum + event.affectedUsers, 0),
-    [events],
-  )
 
   const submitRollback = async () => {
     if (!selectedFlag || reason.trim().length < 8) {
@@ -90,8 +87,8 @@ export function AuditPage() {
       <Box className="audit-summary">
         <Box><Typography variant="caption">审计事件</Typography><Typography className="summary-value">{events.length}</Typography></Box>
         <Box><Typography variant="caption">回滚操作</Typography><Typography className="summary-value">{events.filter((event) => event.action === 'rolled-back').length}</Typography></Box>
-        <Box><Typography variant="caption">累计影响用户</Typography><Typography className="summary-value">{totalImpact.toLocaleString()}</Typography></Box>
-        <Box><Typography variant="caption">平均响应时间</Typography><Typography className="summary-value">8.4 分钟</Typography></Box>
+        <Box><Typography variant="caption">当前影响用户（去重）</Typography><Typography className="summary-value">{(impact?.totalUsers ?? 0).toLocaleString()}</Typography></Box>
+        <Box><Typography variant="caption">重叠人群已去重</Typography><Typography className="summary-value">{(impact?.overlapUsers ?? 0).toLocaleString()}</Typography></Box>
       </Box>
 
       <Card sx={{ mb: 2 }}>
@@ -172,7 +169,7 @@ export function AuditPage() {
       <Dialog open={Boolean(selectedFlag)} onClose={() => setSelectedFlagId('')} fullWidth maxWidth="sm">
         <DialogTitle>回滚 {selectedFlag?.name}</DialogTitle>
         <DialogContent dividers>
-          <Alert severity="error" sx={{ mb: 2 }}>回滚会关闭生产开关、停止灰度并写入审计日志。</Alert>
+          <Alert severity="error" sx={{ mb: 2 }}>回滚会关闭生产开关、停止灰度，释放的去重影响人数将写入审计日志。</Alert>
           <TextField
             label="回滚原因"
             multiline

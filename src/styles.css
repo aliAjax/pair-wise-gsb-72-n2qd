@@ -699,7 +699,7 @@ a:hover {
 }
 
 .report-summary {
-  grid-template-columns: minmax(220px, 1.2fr) repeat(4, minmax(130px, 0.8fr));
+  grid-template-columns: minmax(220px, 1.2fr) repeat(5, minmax(120px, 0.8fr));
 }
 
 .report-summary-main {

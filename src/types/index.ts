@@ -90,6 +90,28 @@ export interface ImpactIssue {
   resolved: boolean
 }
 
+export interface FlagImpact {
+  flagId: string
+  flagKey: string
+  flagName: string
+  environment: Environment
+  rolloutPercentage: number
+  /** 该开关独立覆盖的用户数（未与其他开关去重） */
+  coveredUsers: number
+  /** 去重后的边际贡献：仅被该开关覆盖、去掉它合计就会减少的人数 */
+  marginalUsers: number
+}
+
+export interface ImpactReport {
+  /** 全量去重合计：同一批用户被多个开关覆盖时只计一次 */
+  totalUsers: number
+  /** 未去重的各开关覆盖人数之和 */
+  grossUsers: number
+  /** 被两个及以上开关同时覆盖的去重人数 */
+  overlapUsers: number
+  flags: FlagImpact[]
+}
+
 export interface DashboardData {
   activeFlags: number
   pendingReview: number

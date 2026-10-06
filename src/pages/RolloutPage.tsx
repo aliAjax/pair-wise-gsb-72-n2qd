@@ -215,7 +215,7 @@ export function RolloutPage() {
         <DialogTitle>确认紧急回滚</DialogTitle>
         <DialogContent dividers>
           <Alert severity="error" sx={{ mb: 2 }}>
-            回滚会立即关闭开关、将灰度降至 0，并把所有运行中阶段标记为暂停。
+            回滚会立即关闭开关、将灰度降至 0，释放的去重影响人数会写入审计记录，运行中阶段标记为暂停。
           </Alert>
           <TextField
             label="回滚原因与异常证据"

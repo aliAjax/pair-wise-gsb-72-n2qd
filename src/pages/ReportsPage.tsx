@@ -20,7 +20,7 @@ import {
 } from '@mui/material'
 import DownloadOutlinedIcon from '@mui/icons-material/DownloadOutlined'
 import AssessmentOutlinedIcon from '@mui/icons-material/AssessmentOutlined'
-import { useGetAuditQuery, useGetDashboardQuery, useGetFlagsQuery, useGetIssuesQuery } from '@/services/flagApi'
+import { useGetAuditQuery, useGetDashboardQuery, useGetFlagsQuery, useGetImpactQuery, useGetIssuesQuery } from '@/services/flagApi'
 import { FlagStatusChip } from '@/components/FlagStatusChip'
 
 const escapeCsv = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`
@@ -30,6 +30,7 @@ export function ReportsPage() {
   const [message, setMessage] = useState('')
   const { data: flags = [], isLoading } = useGetFlagsQuery({})
   const { data: dashboard } = useGetDashboardQuery()
+  const { data: impact } = useGetImpactQuery()
   const { data: issues = [] } = useGetIssuesQuery({})
   const { data: audit = [] } = useGetAuditQuery({})
 
@@ -38,9 +39,13 @@ export function ReportsPage() {
     [environment, flags],
   )
 
+  // 统一口径：每个开关的独立覆盖与去重边际，与概览、审计页同源
+  const impactOf = (flagId: string) =>
+    impact?.flags.find((item) => item.flagId === flagId) ?? null
+
   const exportReport = () => {
     const rows = [
-      ['开关Key', '名称', '环境', '状态', '灰度比例', '负责人', '团队', '受众规则', '依赖数', '监控指标', '回滚条件', '预计影响用户'],
+      ['开关Key', '名称', '环境', '状态', '灰度比例', '负责人', '团队', '受众规则', '依赖数', '监控指标', '回滚条件', '影响用户(独立覆盖)'],
       ...reportFlags.map((flag) => [
         flag.key,
         flag.name,
@@ -53,8 +58,9 @@ export function ReportsPage() {
         flag.dependencies.length,
         flag.metricNames.join('|'),
         flag.rollbackConditions.join('|'),
-        Math.round(980000 * (flag.rolloutPercentage / 100)),
+        impactOf(flag.id)?.coveredUsers ?? 0,
       ]),
+      ['合计(全环境去重)', '', '', '', '', '', '', '', '', '', '', impact?.totalUsers ?? 0],
     ]
     const csv = `\uFEFF${rows.map((row) => row.map(escapeCsv).join(',')).join('\n')}`
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
@@ -107,7 +113,8 @@ export function ReportsPage() {
         <Box><Typography variant="caption">生产已启用</Typography><Typography className="summary-value">{reportFlags.filter((flag) => flag.enabled).length}</Typography></Box>
         <Box><Typography variant="caption">未解决阻断项</Typography><Typography className="summary-value danger">{riskFlags.length}</Typography></Box>
         <Box><Typography variant="caption">审计事件</Typography><Typography className="summary-value">{audit.length}</Typography></Box>
-        <Box><Typography variant="caption">影响用户</Typography><Typography className="summary-value">{(dashboard?.affectedUsers ?? 0).toLocaleString()}</Typography></Box>
+        <Box><Typography variant="caption">影响用户（去重）</Typography><Typography className="summary-value">{(impact?.totalUsers ?? 0).toLocaleString()}</Typography></Box>
+        <Box><Typography variant="caption">重叠人群已去重</Typography><Typography className="summary-value">{(impact?.overlapUsers ?? 0).toLocaleString()}</Typography></Box>
       </Box>
 
       <Box className="report-grid">
@@ -154,6 +161,7 @@ export function ReportsPage() {
                   <TableCell>功能开关</TableCell>
                   <TableCell>环境 / 状态</TableCell>
                   <TableCell>灰度</TableCell>
+                  <TableCell>影响用户</TableCell>
                   <TableCell>影响规则</TableCell>
                   <TableCell>监控与回滚</TableCell>
                   <TableCell>最后变更</TableCell>
@@ -171,6 +179,14 @@ export function ReportsPage() {
                       <Box sx={{ mt: 0.5 }}><FlagStatusChip status={flag.status} /></Box>
                     </TableCell>
                     <TableCell>{flag.rolloutPercentage}%</TableCell>
+                    <TableCell>
+                      <Typography variant="body2" fontWeight={700}>
+                        {(impactOf(flag.id)?.coveredUsers ?? 0).toLocaleString()}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        去重边际 {(impactOf(flag.id)?.marginalUsers ?? 0).toLocaleString()}
+                      </Typography>
+                    </TableCell>
                     <TableCell>{flag.audienceRules.length} 条规则 · {flag.regions.length} 地区</TableCell>
                     <TableCell>{flag.metricNames.length} 指标 · {flag.rollbackConditions.length} 回滚条件</TableCell>
                     <TableCell>

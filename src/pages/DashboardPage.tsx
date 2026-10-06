@@ -67,7 +67,7 @@ export function DashboardPage() {
         <StatCard
           label="当前影响用户"
           value={(data?.affectedUsers ?? 0).toLocaleString()}
-          note="按已发布灰度口径估算"
+          note="重叠人群已去重，与审计、报告同源"
           icon={<GroupOutlinedIcon />}
           tone="blue"
         />

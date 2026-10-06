@@ -6,12 +6,14 @@ import {
   rollbackFlag,
   writeDatabase,
 } from '@/services/database'
+import { computeCoveredUsers, computeImpact } from '@/services/impact'
 import type {
   AuditEvent,
   DashboardData,
   FeatureFlag,
   FlagFilter,
   ImpactIssue,
+  ImpactReport,
   ReviewPayload,
 } from '@/types'
 
@@ -21,7 +23,7 @@ const delay = (milliseconds = 180) =>
 export const flagApi = createApi({
   reducerPath: 'flagApi',
   baseQuery: fakeBaseQuery<{ message: string }>(),
-  tagTypes: ['Flags', 'Flag', 'Issues', 'Audit', 'Dashboard'],
+  tagTypes: ['Flags', 'Flag', 'Issues', 'Audit', 'Dashboard', 'Impact'],
   endpoints: (builder) => ({
     getDashboard: builder.query<DashboardData, void>({
       async queryFn() {
@@ -29,6 +31,14 @@ export const flagApi = createApi({
         return { data: getDashboardStats() }
       },
       providesTags: ['Dashboard'],
+    }),
+    getImpact: builder.query<ImpactReport, void>({
+      async queryFn() {
+        await delay()
+        // 统一口径：概览、审计、发布报告共用这份去重后的边际计算
+        return { data: computeImpact(readDatabase().flags) }
+      },
+      providesTags: ['Impact'],
     }),
     getFlags: builder.query<FeatureFlag[], FlagFilter>({
       async queryFn(filters) {
@@ -75,7 +85,7 @@ export const flagApi = createApi({
             summary: '更新开关受众、依赖、版本或回滚条件。',
             before: before.status,
             after: next.status,
-            affectedUsers: Math.round(900000 * (next.rolloutPercentage / 100)),
+            affectedUsers: computeCoveredUsers(db.flags, flag.id),
             createdAt: new Date().toISOString(),
           })
         } else {
@@ -88,14 +98,14 @@ export const flagApi = createApi({
             actor: next.lastChangedBy,
             summary: '创建功能开关草稿。',
             after: next.status,
-            affectedUsers: 0,
+            affectedUsers: computeCoveredUsers(db.flags, next.id),
             createdAt: new Date().toISOString(),
           })
         }
         writeDatabase(db)
         return { data: next }
       },
-      invalidatesTags: ['Flags', 'Dashboard', 'Audit'],
+      invalidatesTags: ['Flags', 'Dashboard', 'Audit', 'Impact'],
     }),
     submitForReview: builder.mutation<FeatureFlag, { id: string; actor: string }>({
       async queryFn({ id, actor }) {
@@ -115,7 +125,7 @@ export const flagApi = createApi({
           summary: '提交发布影响评审。',
           before: 'draft',
           after: 'review',
-          affectedUsers: Math.round(900000 * (flag.rolloutPercentage / 100)),
+          affectedUsers: computeCoveredUsers(db.flags, id),
           createdAt: new Date().toISOString(),
         })
         writeDatabase(db)
@@ -125,6 +135,7 @@ export const flagApi = createApi({
         'Flags',
         'Dashboard',
         'Audit',
+        'Impact',
         { type: 'Flag', id: arg.id },
       ],
     }),
@@ -141,6 +152,7 @@ export const flagApi = createApi({
         'Flags',
         'Dashboard',
         'Audit',
+        'Impact',
         { type: 'Flag', id: arg.id },
       ],
     }),
@@ -157,6 +169,7 @@ export const flagApi = createApi({
         'Flags',
         'Dashboard',
         'Audit',
+        'Impact',
         { type: 'Flag', id: arg.id },
       ],
     }),
@@ -189,6 +202,7 @@ export const flagApi = createApi({
 
 export const {
   useGetDashboardQuery,
+  useGetImpactQuery,
   useGetFlagsQuery,
   useGetFlagQuery,
   useSaveFlagMutation,
